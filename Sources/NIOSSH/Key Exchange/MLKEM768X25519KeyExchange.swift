@@ -33,7 +33,9 @@ import Foundation
 ///   * Server reply payload (single SSH string):
 ///       `MLKEM768 ciphertext (1088 B) || X25519 public key (32 B)`
 ///   * Shared secret used by SSH:
-///       `K = SHA-256(MLKEM_SS || X25519_SS)` — encoded as `mpint`
+///       `K = SHA-256(MLKEM_SS || X25519_SS)`, encoded as an SSH `string`
+///       (not an `mpint`, unlike the classical ECDH methods). OpenSSH does
+///       the same; see `kexmlkem768x25519.c`.
 ///   * Exchange-hash function: `SHA-256`
 ///
 /// `K` is intentionally derived as a fixed-length SHA-256 digest so that an
@@ -71,7 +73,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     private var serverX25519PrivateKey: Curve25519.KeyAgreement.PrivateKey?
 
     // SHA-256 digest of (MLKEM_SS || X25519_SS), held as raw bytes so it can
-    // be fed into the SSH exchange hash as an `mpint`.
+    // be fed into the SSH exchange hash as a `string`.
     private var sharedSecretDigest: [UInt8]?
 
     // Both payloads are echoed verbatim into the SSH exchange hash, so we
@@ -292,7 +294,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
 
         var hasher = SHA256()
         hasher.update(data: initialExchangeBytes.readableBytesView)
-        Self.updateAsMPInt(&hasher, sharedSecretDigest: sharedSecretDigest)
+        Self.updateAsSSHString(&hasher, sharedSecretDigest: sharedSecretDigest)
 
         let exchangeHash = hasher.finalize()
 
@@ -315,19 +317,19 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
         return (KeyExchangeResult(sessionID: sessionID, keys: keys), exchangeHash)
     }
 
-    /// SSH's wire encoding for `K` is `mpint`: a length-prefixed big-endian
-    /// two's-complement integer. For a 32-byte SHA-256 digest, we just need
-    /// to insert a leading zero byte if the high bit is set so the value
-    /// reads as positive. The 4-byte length prefix is also part of the
-    /// hashed input per RFC 4253 §8.
-    private static func updateAsMPInt(_ hasher: inout SHA256, sharedSecretDigest: [UInt8]) {
-        let needsPadding = (sharedSecretDigest.first ?? 0) & 0x80 != 0
-        let length = UInt32(sharedSecretDigest.count + (needsPadding ? 1 : 0))
-        var lengthBE = length.bigEndian
+    /// For this method `K` goes into the exchange hash and the key
+    /// derivation as an SSH `string`: a 4-byte big-endian length (always 32
+    /// here), then the digest bytes as they are. Unlike an `mpint`, there's
+    /// no leading zero added when the high bit is set and no leading zeros
+    /// stripped. Encoding it as an `mpint` matched OpenSSH only when the
+    /// digest's first byte was nonzero with its high bit clear, so about half
+    /// of all connections to OpenSSH failed with
+    /// `invalidExchangeHashSignature`.
+    ///
+    /// https://github.com/openssh/openssh-portable/blob/ebdaacf4907033af1cbf1fef593436081dcd67a7/kexmlkem768x25519.c#L152-L156
+    private static func updateAsSSHString(_ hasher: inout SHA256, sharedSecretDigest: [UInt8]) {
+        var lengthBE = UInt32(sharedSecretDigest.count).bigEndian
         withUnsafeBytes(of: &lengthBE) { hasher.update(bufferPointer: $0) }
-        if needsPadding {
-            hasher.update(data: [UInt8(0)])
-        }
         hasher.update(data: sharedSecretDigest)
     }
 
@@ -343,7 +345,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
         func deriveKey(letter: UInt8, expectedSize: Int) -> [UInt8] {
             // K1 = HASH(K || H || letter || session_id)
             var hasher = SHA256()
-            Self.updateAsMPInt(&hasher, sharedSecretDigest: sharedSecretDigest)
+            Self.updateAsSSHString(&hasher, sharedSecretDigest: sharedSecretDigest)
             exchangeHash.withUnsafeBytes { hasher.update(bufferPointer: $0) }
             hasher.update(data: [letter])
             hasher.update(data: sessionID.readableBytesView)
@@ -351,7 +353,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
             // K2 = HASH(K || H || K1); K3 = HASH(K || H || K1 || K2); ...
             while out.count < expectedSize {
                 var extend = SHA256()
-                Self.updateAsMPInt(&extend, sharedSecretDigest: sharedSecretDigest)
+                Self.updateAsSSHString(&extend, sharedSecretDigest: sharedSecretDigest)
                 exchangeHash.withUnsafeBytes { extend.update(bufferPointer: $0) }
                 extend.update(data: out)
                 out.append(contentsOf: extend.finalize())
