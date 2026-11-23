@@ -18,6 +18,8 @@ import XCTest
 
 @testable import NIOSSH
 
+// Same check as MLKEM768X25519KeyExchange.swift (see the comment there)
+#if !canImport(CryptoKit) || compiler(>=6.2)
 @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, macCatalyst 26.0, visionOS 26.0, *)
 final class MLKEM768X25519KeyExchangeTests: XCTestCase {
     private func keyExchangeAgreed(_ first: KeyExchangeResult, _ second: KeyExchangeResult) {
@@ -279,3 +281,4 @@ extension SSHConnectionRole {
         )
     }
 }
+#endif

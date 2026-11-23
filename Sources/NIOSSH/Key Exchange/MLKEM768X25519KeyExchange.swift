@@ -22,6 +22,13 @@ import FoundationEssentials
 import Foundation
 #endif
 
+// We only build this key exchange where MLKEM768 exists. On Apple platforms
+// swift-crypto re-exports CryptoKit, and CryptoKit only has MLKEM768 in the
+// 26 SDKs (Xcode 26 and later). We check the compiler version instead of the
+// SDK, because Swift 6.2 first shipped with Xcode 26. (A Swift 6.2 toolchain
+// used with an older SDK would still fail to build this.) Everywhere else
+// (e.g. Linux) swift-crypto has its own MLKEM768.
+#if !canImport(CryptoKit) || compiler(>=6.2)
 /// Post-quantum hybrid key exchange: ML-KEM-768 (FIPS 203) with X25519.
 ///
 /// The wire format and the key derivation follow OpenSSH 9.9's
@@ -381,3 +388,4 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
         }
     }
 }
+#endif
