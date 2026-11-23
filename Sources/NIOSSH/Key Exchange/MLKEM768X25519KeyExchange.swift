@@ -22,62 +22,59 @@ import FoundationEssentials
 import Foundation
 #endif
 
-/// Post-quantum hybrid key exchange combining ML-KEM-768 (FIPS 203) with X25519.
+/// Post-quantum hybrid key exchange: ML-KEM-768 (FIPS 203) with X25519.
 ///
-/// Wire format and key derivation follow the IETF draft
-/// `draft-kampanakis-curdle-ssh-pq-ke` and OpenSSH 9.9's
-/// `mlkem768x25519-sha256` algorithm:
+/// The wire format and the key derivation follow OpenSSH 9.9's
+/// `mlkem768x25519-sha256` and the IETF draft
+/// `draft-kampanakis-curdle-ssh-pq-ke`:
 ///
-///   * Client init payload (single SSH string):
-///       `MLKEM768 encapsulation key (1184 B) || X25519 public key (32 B)`
-///   * Server reply payload (single SSH string):
-///       `MLKEM768 ciphertext (1088 B) || X25519 public key (32 B)`
-///   * Shared secret used by SSH:
-///       `K = SHA-256(MLKEM_SS || X25519_SS)`, encoded as an SSH `string`
-///       (not an `mpint`, unlike the classical ECDH methods). OpenSSH does
-///       the same; see `kexmlkem768x25519.c`.
-///   * Exchange-hash function: `SHA-256`
+///   * The client's init payload is one SSH string: the ML-KEM-768
+///     encapsulation key (1184 bytes), then the X25519 public key (32 bytes).
+///   * The server's reply payload is one SSH string: the ML-KEM-768
+///     ciphertext (1088 bytes), then the X25519 public key (32 bytes).
+///   * The shared secret is `K = SHA-256(MLKEM_SS || X25519_SS)`. It's
+///     encoded as an SSH `string`, not as an `mpint` the way the ECDH
+///     methods encode it. OpenSSH does the same in `kexmlkem768x25519.c`.
+///   * The exchange hash is SHA-256.
 ///
-/// `K` is intentionally derived as a fixed-length SHA-256 digest so that an
-/// attacker who compromises only one of the two primitives still cannot
-/// recover the SSH session keys: ML-KEM contributes quantum resistance,
-/// X25519 contributes well-studied classical security. This "hybrid by
-/// hashing" matches OpenSSH 9.9.
+/// `K` is a hash of both shared secrets: an attacker who breaks only one
+/// of ML-KEM and X25519 still can't recover the session keys. ML-KEM is
+/// there for quantum resistance, and X25519 is a well-studied classical
+/// method. OpenSSH 9.9 combines them the same way (and this is an
+/// intentional copy of that model).
 ///
-/// > Important: This struct lazy-generates its ephemeral keypairs inside
-/// > `initiateKeyExchangeClientSide(allocator:)` and
-/// > `completeKeyExchangeServerSide(...)` because `MLKEM768.PrivateKey.init`
-/// > can throw and the existing `EllipticCurveKeyExchangeProtocol.init`
-/// > is neither throwing nor mutating. See the DRAFT PR description for the
-/// > follow-up question of whether the protocol should grow a throwing
-/// > variant or whether the lazy-generation pattern stays.
+/// > Important: We don't make the ephemeral keys in `init`, because
+/// > `MLKEM768.PrivateKey.init` can throw and
+/// > `EllipticCurveKeyExchangeProtocol.init` can't. We make them in
+/// > `initiateKeyExchangeClientSide(allocator:)` on the client and in
+/// > `completeKeyExchangeServerSide(...)` on the server.
 @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, macCatalyst 26.0, visionOS 26.0, *)
 struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
-    /// Size of an ML-KEM-768 encapsulation (public) key in bytes — FIPS 203 §8.
+    /// Size in bytes of an ML-KEM-768 encapsulation (public) key (FIPS 203, section 8)
     static let mlkemPublicKeySize = 1184
 
-    /// Size of an ML-KEM-768 ciphertext in bytes — FIPS 203 §8.
+    /// Size in bytes of an ML-KEM-768 ciphertext (FIPS 203, section 8)
     static let mlkemCiphertextSize = 1088
 
-    /// Size of an X25519 public key in bytes — RFC 7748 §6.1.
+    /// Size in bytes of an X25519 public key (RFC 7748, section 6.1)
     static let x25519PublicKeySize = 32
 
     private var previousSessionIdentifier: ByteBuffer?
     private var ourRole: SSHConnectionRole
 
-    // Client-only ephemeral state, populated during init.
+    // The client's ephemeral keys, made in initiateKeyExchangeClientSide
     private var clientX25519PrivateKey: Curve25519.KeyAgreement.PrivateKey?
     private var clientMLKEMPrivateKey: MLKEM768.PrivateKey?
 
-    // Server-only ephemeral state, populated during completion.
+    // The server's ephemeral key, made in completeKeyExchangeServerSide
     private var serverX25519PrivateKey: Curve25519.KeyAgreement.PrivateKey?
 
-    // SHA-256 digest of (MLKEM_SS || X25519_SS), held as raw bytes so it can
-    // be fed into the SSH exchange hash as a `string`.
+    // K, the SHA-256 digest of (MLKEM_SS || X25519_SS). We keep it as raw
+    // bytes because it goes into the exchange hash as a `string`.
     private var sharedSecretDigest: [UInt8]?
 
-    // Both payloads are echoed verbatim into the SSH exchange hash, so we
-    // hold onto them across the init/reply round-trip.
+    // Both payloads go into the exchange hash exactly as they were sent, so
+    // we keep them until we compute the hash.
     private var clientInitPayload: ByteBuffer?
     private var serverReplyPayload: ByteBuffer?
 
@@ -97,10 +94,9 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     ) -> SSHMessage.KeyExchangeECDHInitMessage {
         precondition(self.ourRole.isClient, "Only clients may initiate the client side key exchange!")
 
-        // ML-KEM-768 keygen is implemented as throwing in swift-crypto. The
-        // KEX state machine doesn't tolerate a throwing initiator, so we
-        // crash on the (theoretically unreachable) failure path. A future
-        // protocol revision could make this method throwing.
+        // MLKEM768.PrivateKey() can throw, but this method can't, so we crash
+        // if making the key fails. We don't expect that to happen. A later
+        // change to the protocol could let this method throw instead.
         let x25519PrivateKey = Curve25519.KeyAgreement.PrivateKey()
         let mlkemPrivateKey: MLKEM768.PrivateKey
         do {
@@ -252,10 +248,10 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
 
     // MARK: - Hybrid secret derivation
 
-    /// Folds the two component shared secrets into the SSH `K` value via
-    /// `SHA-256(MLKEM_SS || X25519_SS)`. Per the IETF draft, fixed-length
-    /// hashing prevents domain-separation issues and bounds `K` so subsequent
-    /// SSH key derivation behaves identically to other SHA-256 KEX methods.
+    /// Sets `K` to `SHA-256(MLKEM_SS || X25519_SS)`. Per the IETF draft,
+    /// hashing the two secrets avoids domain separation problems. It also
+    /// gives `K` a fixed length, so the key derivation after it works the same
+    /// as in the other SHA-256 key exchange methods.
     private mutating func deriveHybridSharedSecret(
         mlkemSharedSecret: SymmetricKey,
         x25519SharedSecret: SharedSecret
@@ -266,7 +262,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
         self.sharedSecretDigest = Array(hasher.finalize())
     }
 
-    // MARK: - SSH exchange-hash + session-key derivation
+    // MARK: - Exchange hash and session keys
 
     private func finalizeKeyExchange(
         clientInitPayload: ByteBuffer,
@@ -284,9 +280,8 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
             $0.writeSSHHostKey(serverHostKey)
         }
 
-        // Both client and server hash in payloads in the same canonical
-        // order: client init then server reply. This matches the IETF
-        // draft and how OpenSSH 9.9 computes the exchange hash.
+        // Both sides hash the client's init payload, then the server's reply.
+        // That's the order in the IETF draft and in OpenSSH 9.9.
         var initPayloadCopy = clientInitPayload
         var replyPayloadCopy = serverReplyPayload
         initialExchangeBytes.writeCompositeSSHString { $0.writeBuffer(&initPayloadCopy) }
@@ -321,9 +316,9 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     /// derivation as an SSH `string`: a 4-byte big-endian length (always 32
     /// here), then the digest bytes as they are. Unlike an `mpint`, there's
     /// no leading zero added when the high bit is set and no leading zeros
-    /// stripped. Encoding it as an `mpint` matched OpenSSH only when the
-    /// digest's first byte was nonzero with its high bit clear, so about half
-    /// of all connections to OpenSSH failed with
+    /// stripped. If we encoded it as an `mpint`, we'd only match OpenSSH when
+    /// the digest's first byte is nonzero with its high bit clear. About half
+    /// of all connections to OpenSSH would fail with
     /// `invalidExchangeHashSignature`.
     ///
     /// https://github.com/openssh/openssh-portable/blob/ebdaacf4907033af1cbf1fef593436081dcd67a7/kexmlkem768x25519.c#L152-L156
@@ -333,9 +328,9 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
         hasher.update(data: sharedSecretDigest)
     }
 
-    /// Implements RFC 4253 §7.2 with `HASH = SHA-256`. Derives the six
-    /// per-direction session keys (initial IVs, encryption keys, MAC keys)
-    /// from `K`, `H` and the session identifier.
+    /// Derives the six session keys (an IV, an encryption key and a MAC key
+    /// for each direction) from `K`, `H` and the session ID. This is RFC 4253
+    /// section 7.2 with `HASH = SHA-256`.
     private func generateKeys(
         sharedSecretDigest: [UInt8],
         exchangeHash: SHA256.Digest,

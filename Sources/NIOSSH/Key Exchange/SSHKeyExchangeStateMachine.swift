@@ -597,9 +597,9 @@ extension SSHKeyExchangeStateMachine {
             EllipticCurveKeyExchange<Curve25519.KeyAgreement.PrivateKey>.self,
         ]
         if #available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, macCatalyst 26.0, visionOS 26.0, *) {
-            // Post-quantum hybrid first: OpenSSH 9.9+ peers prefer it, and
-            // classical-only peers will fall through to curve25519-sha256
-            // via standard SSH algorithm negotiation.
+            // The post-quantum hybrid goes first. If the peer doesn't support
+            // it, we use the next algorithm on the client's list that both
+            // sides support.
             return [MLKEM768X25519KeyExchange.self] + classical
         } else {
             return classical
