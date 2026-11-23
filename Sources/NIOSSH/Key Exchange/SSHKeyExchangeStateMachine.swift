@@ -152,7 +152,7 @@ struct SSHKeyExchangeStateMachine {
 
                 // verify algorithms
                 let negotiated = try self.negotiatedAlgorithms(message)
-                var exchanger = try self.exchangerForAlgorithm(negotiated.negotiatedKeyExchangeAlgorithm)
+                let exchanger = try self.exchangerForAlgorithm(negotiated.negotiatedKeyExchangeAlgorithm)
 
                 // Ok, we need to send the key exchange message.
                 let message = SSHMessage.keyExchangeInit(
@@ -188,7 +188,7 @@ struct SSHKeyExchangeStateMachine {
             }
 
             let negotiated = try self.negotiatedAlgorithms(message)
-            var exchanger = try self.exchangerForAlgorithm(negotiated.negotiatedKeyExchangeAlgorithm)
+            let exchanger = try self.exchangerForAlgorithm(negotiated.negotiatedKeyExchangeAlgorithm)
 
             let result: SSHMultiMessage
             switch self.role {
@@ -539,7 +539,7 @@ struct SSHKeyExchangeStateMachine {
     private func exchangerForAlgorithm(_ algorithm: Substring) throws -> EllipticCurveKeyExchangeProtocol {
         for implementation in Self.supportedKeyExchangeImplementations {
             if implementation.keyExchangeAlgorithmNames.contains(algorithm) {
-                return implementation.init(
+                return try implementation.init(
                     ourRole: self.role,
                     previousSessionIdentifier: self.previousSessionIdentifier
                 )

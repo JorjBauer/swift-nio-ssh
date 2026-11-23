@@ -42,12 +42,6 @@ import Foundation
 /// there for quantum resistance, and X25519 is a well-studied classical
 /// method. OpenSSH 9.9 combines them the same way (and this is an
 /// intentional copy of that model).
-///
-/// > Important: We don't make the ephemeral keys in `init`, because
-/// > `MLKEM768.PrivateKey.init` can throw and
-/// > `EllipticCurveKeyExchangeProtocol.init` can't. We make them in
-/// > `initiateKeyExchangeClientSide(allocator:)` on the client and in
-/// > `completeKeyExchangeServerSide(...)` on the server.
 @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, macCatalyst 26.0, visionOS 26.0, *)
 struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     /// Size in bytes of an ML-KEM-768 encapsulation (public) key (FIPS 203, section 8)
@@ -62,7 +56,7 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     private var previousSessionIdentifier: ByteBuffer?
     private var ourRole: SSHConnectionRole
 
-    // The client's ephemeral keys, made in initiateKeyExchangeClientSide
+    // The client's ephemeral keys, made in init
     private var clientX25519PrivateKey: Curve25519.KeyAgreement.PrivateKey?
     private var clientMLKEMPrivateKey: MLKEM768.PrivateKey?
 
@@ -74,13 +68,18 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
     private var sharedSecretDigest: [UInt8]?
 
     // Both payloads go into the exchange hash exactly as they were sent, so
-    // we keep them until we compute the hash.
+    // we keep them until we compute the hash. (On the client,
+    // makeClientInitPayload rebuilds the init payload from the keys instead.)
     private var clientInitPayload: ByteBuffer?
     private var serverReplyPayload: ByteBuffer?
 
-    init(ourRole: SSHConnectionRole, previousSessionIdentifier: ByteBuffer?) {
+    init(ourRole: SSHConnectionRole, previousSessionIdentifier: ByteBuffer?) throws {
         self.ourRole = ourRole
         self.previousSessionIdentifier = previousSessionIdentifier
+        if ourRole.isClient {
+            self.clientX25519PrivateKey = Curve25519.KeyAgreement.PrivateKey()
+            self.clientMLKEMPrivateKey = try MLKEM768.PrivateKey()
+        }
     }
 
     static var keyExchangeAlgorithmNames: [Substring] {
@@ -89,31 +88,28 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
 
     // MARK: - Client side
 
-    mutating func initiateKeyExchangeClientSide(
+    func initiateKeyExchangeClientSide(
         allocator: ByteBufferAllocator
     ) -> SSHMessage.KeyExchangeECDHInitMessage {
         precondition(self.ourRole.isClient, "Only clients may initiate the client side key exchange!")
+        return .init(publicKey: self.makeClientInitPayload(allocator: allocator))
+    }
 
-        // MLKEM768.PrivateKey() can throw, but this method can't, so we crash
-        // if making the key fails. We don't expect that to happen. A later
-        // change to the protocol could let this method throw instead.
-        let x25519PrivateKey = Curve25519.KeyAgreement.PrivateKey()
-        let mlkemPrivateKey: MLKEM768.PrivateKey
-        do {
-            mlkemPrivateKey = try MLKEM768.PrivateKey()
-        } catch {
-            preconditionFailure("MLKEM768 keypair generation failed: \(error)")
+    // The client's init payload: the ML-KEM-768 encapsulation key, then the
+    // X25519 public key. We rebuild it from the keys each time we need it, so
+    // initiateKeyExchangeClientSide doesn't have to store it.
+    private func makeClientInitPayload(allocator: ByteBufferAllocator) -> ByteBuffer {
+        guard
+            let clientX25519PrivateKey = self.clientX25519PrivateKey,
+            let clientMLKEMPrivateKey = self.clientMLKEMPrivateKey
+        else {
+            preconditionFailure("Only clients have an init payload")
         }
 
-        self.clientX25519PrivateKey = x25519PrivateKey
-        self.clientMLKEMPrivateKey = mlkemPrivateKey
-
         var payload = allocator.buffer(capacity: Self.mlkemPublicKeySize + Self.x25519PublicKeySize)
-        payload.writeBytes(mlkemPrivateKey.publicKey.rawRepresentation)
-        payload.writeBytes(x25519PrivateKey.publicKey.rawRepresentation)
-
-        self.clientInitPayload = payload
-        return .init(publicKey: payload)
+        payload.writeBytes(clientMLKEMPrivateKey.publicKey.rawRepresentation)
+        payload.writeBytes(clientX25519PrivateKey.publicKey.rawRepresentation)
+        return payload
     }
 
     mutating func receiveServerKeyExchangePayload(
@@ -126,11 +122,11 @@ struct MLKEM768X25519KeyExchange: EllipticCurveKeyExchangeProtocol {
 
         guard
             let clientX25519PrivateKey = self.clientX25519PrivateKey,
-            let clientMLKEMPrivateKey = self.clientMLKEMPrivateKey,
-            let clientInitPayload = self.clientInitPayload
+            let clientMLKEMPrivateKey = self.clientMLKEMPrivateKey
         else {
-            preconditionFailure("receiveServerKeyExchangePayload called before initiateKeyExchangeClientSide")
+            preconditionFailure("Clients make their keys in init")
         }
+        let clientInitPayload = self.makeClientInitPayload(allocator: allocator)
 
         var replyBytes = message.publicKey
         guard replyBytes.readableBytes == Self.mlkemCiphertextSize + Self.x25519PublicKeySize else {

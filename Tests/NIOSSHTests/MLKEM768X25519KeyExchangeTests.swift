@@ -40,11 +40,11 @@ final class MLKEM768X25519KeyExchangeTests: XCTestCase {
     }
 
     func testRoundTripProducesMatchingKeys() throws {
-        var server = MLKEM768X25519KeyExchange(
+        var server = try MLKEM768X25519KeyExchange(
             ourRole: .mlkemTest_server([.init(ed25519Key: .init())]),
             previousSessionIdentifier: nil
         )
-        var client = MLKEM768X25519KeyExchange(ourRole: .mlkemTest_client, previousSessionIdentifier: nil)
+        var client = try MLKEM768X25519KeyExchange(ourRole: .mlkemTest_client, previousSessionIdentifier: nil)
         let serverHostKey = NIOSSHPrivateKey(ed25519Key: .init())
 
         var initialExchangeBytes = ByteBufferAllocator().buffer(capacity: 4096)
@@ -89,11 +89,11 @@ final class MLKEM768X25519KeyExchangeTests: XCTestCase {
         var previousSessionIdentifier = ByteBufferAllocator().buffer(capacity: 32)
         previousSessionIdentifier.writeBytes(0..<32)
 
-        var server = MLKEM768X25519KeyExchange(
+        var server = try MLKEM768X25519KeyExchange(
             ourRole: .mlkemTest_server([.init(ed25519Key: .init())]),
             previousSessionIdentifier: previousSessionIdentifier
         )
-        var client = MLKEM768X25519KeyExchange(
+        var client = try MLKEM768X25519KeyExchange(
             ourRole: .mlkemTest_client,
             previousSessionIdentifier: previousSessionIdentifier
         )
@@ -136,7 +136,7 @@ final class MLKEM768X25519KeyExchangeTests: XCTestCase {
     // https://github.com/openssh/openssh-portable/blob/ebdaacf4907033af1cbf1fef593436081dcd67a7/kexgen.c#L67-L79
     // https://github.com/openssh/openssh-portable/blob/ebdaacf4907033af1cbf1fef593436081dcd67a7/kex.c#L1087-L1093
     func testClientMatchesOpenSSHWhenKHasHighBitSet() throws {
-        var client = MLKEM768X25519KeyExchange(ourRole: .mlkemTest_client, previousSessionIdentifier: nil)
+        var client = try MLKEM768X25519KeyExchange(ourRole: .mlkemTest_client, previousSessionIdentifier: nil)
         let serverHostKey = NIOSSHPrivateKey(ed25519Key: .init())
         let keySizes = AES128GCMOpenSSHTransportProtection.keySizes
 
@@ -236,7 +236,7 @@ final class MLKEM768X25519KeyExchangeTests: XCTestCase {
     }
 
     func testRejectsTruncatedClientInit() throws {
-        var server = MLKEM768X25519KeyExchange(
+        var server = try MLKEM768X25519KeyExchange(
             ourRole: .mlkemTest_server([.init(ed25519Key: .init())]),
             previousSessionIdentifier: nil
         )

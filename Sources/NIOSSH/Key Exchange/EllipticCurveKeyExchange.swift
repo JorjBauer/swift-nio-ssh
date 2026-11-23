@@ -25,9 +25,10 @@ import Foundation
 /// This protocol defines a container used by the key exchange state machine to manage key exchange.
 /// This type erases the specific key exchanger.
 protocol EllipticCurveKeyExchangeProtocol: _NIOSSHSendableMetatype {
-    init(ourRole: SSHConnectionRole, previousSessionIdentifier: ByteBuffer?)
+    // Throws because MLKEM768X25519KeyExchange makes an ML-KEM key here, which can fail
+    init(ourRole: SSHConnectionRole, previousSessionIdentifier: ByteBuffer?) throws
 
-    mutating func initiateKeyExchangeClientSide(allocator: ByteBufferAllocator) -> SSHMessage.KeyExchangeECDHInitMessage
+    func initiateKeyExchangeClientSide(allocator: ByteBufferAllocator) -> SSHMessage.KeyExchangeECDHInitMessage
 
     mutating func completeKeyExchangeServerSide(
         clientKeyExchangeMessage message: SSHMessage.KeyExchangeECDHInitMessage,
